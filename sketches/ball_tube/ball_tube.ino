@@ -13,7 +13,9 @@ constexpr int button_enable_pid_mod         = 18;
 constexpr int led_disable_mods              = 53;
 constexpr int led_enable_mods               = 51;
 constexpr int position_limits_mm[2]         = {50, 400};
-constexpr int moving_average_window_size    = 100;
+constexpr int moving_average_window_size    = 30;
+constexpr float feed_forward_slope          = 0.0;
+constexpr float feed_forward_offset         = 30.0;
 
 typedef struct {
   uint8_t index;
@@ -74,6 +76,11 @@ void update_gains() {
   );
 }
 
+float compute_feed_forward(float dist) {
+  // range: 30-330
+  return max(0.0, (330-dist)*feed_forward_slope + feed_forward_offset);
+}
+
 void filter_data(filtered_data_t *data, float new_val) {
   // Shoutout to Manoj for the suggestion
   if (data->index != moving_average_window_size-1) {
@@ -110,7 +117,8 @@ void loop() {
   last_ts = millis();
 
   /* Get PWM */
-  int pwm = controller.GetClampedOutput(100.0, 255.0);
+  int ff = compute_feed_forward(actual_dist.val);
+  int pwm = controller.GetClampedOutput(0.0, 255.0 - ff) + ff;
 
   /* Send PWM signal to fan */
   analogWrite(fan_pwm_out, pwm);
@@ -122,7 +130,8 @@ void loop() {
   LOG(target_dist);
   LOG(controller.GetKpContribution());
   LOG(controller.GetKiContribution());
-  LOGEOL(controller.GetKdContribution());
+  LOG(controller.GetKdContribution());
+  LOGEOL(ff);
 
   delay(10); // 10 ms delay, hard coded for now...
 }
