@@ -16,8 +16,8 @@ const int servoPin = 9;
 Servo myServo;
  
 // PID variables
-float Kp = 2.2;
-float Ki = 0.1;
+float Kp = 2.5;
+float Ki = 0.0;
 float Kd = 1.1;
 double setPoint, input, output, servoOutput;                                       
 PID myPid(&input, &output, &setPoint, Kp, Ki, Kd, DIRECT);
@@ -32,14 +32,14 @@ void movingAvgSetup() {
 
 void sensorSetup() {
   Serial.println("Sensor Setup");
-  pinMode(trigPin, output);
-  pinMode(echoPin, input);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
 }
 
 void servoSetup() {
   Serial.println("Servo Setup");
   myServo.attach(servoPin); 
-  myServo.write(137);       // Set beam horizontal at 137
+  myServo.write(121);       // Set beam horizontal
 }
 
 void pidSetup() {
@@ -47,7 +47,7 @@ void pidSetup() {
   input = getDistance();
   myPid.SetMode(AUTOMATIC);
   myPid.SetSampleTime(30);   // Changes from default of 100ms to 30ms
-  myPid.SetOutputLimits(-43,43);  // 137-43=94, 137+43=180 (servo limit)
+  myPid.SetOutputLimits(-59,59);  // servo limits
 }
 
 void setup() {
@@ -64,15 +64,17 @@ void loop() {
   input = getDistance();                                            
   
   myPid.Compute();
-  servoOutput = 137 + output; // 102 degrees is my horizontal 
+  servoOutput = 121 - output; // horizontal + (-output)
   myServo.write(servoOutput);
 
   Serial.print(millis() / 1000);
   Serial.print(", ");
   Serial.print(input);
   Serial.print(", ");
+  Serial.print(output);
+  Serial.print(", ");
   Serial.println(servoOutput);
-  delay(40);
+  delay(500);
 }
       
 float getDistance() {
