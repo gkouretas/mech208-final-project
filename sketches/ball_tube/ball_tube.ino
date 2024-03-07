@@ -71,7 +71,7 @@ void update_gains() {
   controller.SetGains(
     kp_, 
     ki_, 
-    kd_,
+    0,
     ki_ == controller.GetGains().ki ? false : true
   );
 }
@@ -121,17 +121,17 @@ void loop() {
   int pwm = controller.GetClampedOutput(0.0, 255.0 - ff) + ff;
 
   /* Send PWM signal to fan */
-  analogWrite(fan_pwm_out, pwm);
+  analogWrite(fan_pwm_out, map(analogRead(kp_in), 0, 1023, 0, 255));
   digitalWrite(led_enable_mods, !edit_state);
   digitalWrite(led_disable_mods, edit_state);
 
   /* Serial console */
-  LOG((int)(actual_dist.val));
-  LOG(target_dist);
-  LOG(controller.GetKpContribution());
-  LOG(controller.GetKiContribution());
-  LOG(controller.GetKdContribution());
-  LOGEOL(ff);
+  // LOG((int)(actual_dist.val));
+  // LOG(target_dist);
+  LOGEOL(map(analogRead(kp_in), 0, 1023, 0, 255));
+  // LOG(controller.GetKiContribution());
+  // LOG(controller.GetKdContribution());
+  // LOGEOL(ff);
 
   delay(10); // 10 ms delay, hard coded for now...
 }
