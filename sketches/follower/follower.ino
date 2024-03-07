@@ -130,7 +130,7 @@ constexpr float feed_forward_slope              = 0.0;
 constexpr float feed_forward_offset             = 30.0;
 
 unsigned long ts;
-constexpr int loop_rate_ms = 10.0;
+constexpr int loop_rate_ms = 50.0;
 
 static input_command_interface_t fan_command_interface = INIT_COMMAND_INTERFACE(fan);
 static input_command_interface_t beam_command_interface = INIT_COMMAND_INTERFACE(beam);
@@ -182,7 +182,7 @@ static system_interface_t beam_system_interface = {
   .command_interface = &beam_command_interface,
 };
 
-system_interface_t interfaces[2] = {fan_system_interface, beam_system_interface}; 
+system_interface_t interfaces[1] = {fan_system_interface}; 
 
 void setup() {
   // put your setup code here, to run once:
@@ -239,10 +239,12 @@ void loop() {
     log_data(&interface);
   }
 
-  /* Log timestamp, start newline in prep for next packet */
   LOGEOL(ts);
 
-  delay(loop_rate_ms - (millis() - ts));
+  /* Log timestamp, start newline in prep for next packet */
+  unsigned long duration = (millis() - ts);
+  if (duration < loop_rate_ms)
+    delay(loop_rate_ms - duration);
 }
 
 void log_data(system_interface_t *interface) {
