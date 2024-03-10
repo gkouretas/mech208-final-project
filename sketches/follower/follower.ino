@@ -289,7 +289,7 @@ void log_data(system_interface_t *interface) {
   auto gains = interface->controller.GetGains();
   auto contributions = interface->controller.GetContributions();  
   LOG(interface->sys);
-  LOG(interface->target_position);
+  LOG(interface->target_position.filtered);
   LOG(interface->actual_position.filtered);
   LOG(gains.kp);
   LOG(gains.ki);
