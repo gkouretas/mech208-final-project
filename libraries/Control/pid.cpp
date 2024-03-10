@@ -7,7 +7,6 @@ ff_callback_(ff_callback),
 contrib_({ 0.0, 0.0, 0.0, 0.0 }), 
 duration_(0.0), 
 integral_sum_(0.0),
-actual_(0.0), 
 error_(0.0), 
 output_(0.0) 
 {}

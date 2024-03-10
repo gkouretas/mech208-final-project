@@ -32,11 +32,7 @@ class PID {
         double GetDuration() const;
         double GetError() const;
         double GetOutput() const;
-        double GetClampedOutput(double lower_limit, double upper_limit) const;
-        
-        double GetKiContribution() const;
-        double GetKdContribution() const;
-        double GetFeedforwardContribution() const;
+        double GetClampedOutput(double lower_limit, double upper_limit) const;        
         void Reset();
         void Step(double dt, double actual, double command);
     private:
