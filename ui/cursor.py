@@ -33,7 +33,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.primary_position: pg.PlotDataItem = \
             self.plot_widget.plot(
                 symbol = 'o', 
-                symbolBrush = 'white', 
+                symbolBrush = 'blue', 
                 symbolSize = _BALL_RADIUS*2, 
                 pxMode = False
             )
@@ -45,7 +45,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.secondary_position: pg.PlotDataItem = \
             self.plot_widget.plot(
                 symbol = 'o', 
-                symbolBrush = 'red', 
+                symbolBrush = 'yellow', 
                 symbolSize = _BALL_RADIUS*2, 
                 pxMode = False
             )

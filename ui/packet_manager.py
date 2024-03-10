@@ -34,7 +34,7 @@ class PacketManager:
     def __init__(self, queues: QueueContainer) -> None:
         self._fan_queue = queues.fan
         self._beam_queue = queues.beam
-        self._com = serial.Serial(port = "COM18", baudrate = 115200)
+        self._com = serial.Serial(port = "COM3", baudrate = 115200)
         
     def run(self): 
         threading.Thread(target = self._poll, daemon = True).start()
@@ -60,7 +60,6 @@ class PacketManager:
                 info = buffer.decode().replace("\r\n", "").split(" ")
                 if len(info) == num_items + 1:      # single system
                     if self._fan_queue is not None:
-                        print(info)
                         self._fan_queue.append(
                             self._populate_packet(info = info, offset = 0)
                         )
@@ -69,10 +68,13 @@ class PacketManager:
                         self._fan_queue.append(
                             self._populate_packet(info = info, offset = 0)
                         )
+                        print(self._fan_queue)
+                        
                     if self._beam_queue is not None:
                         self._beam_queue.append(
                             self._populate_packet(info = info, offset = num_items)
                         )
+                        
                 else:
                     raise ValueError(f"Unexpected number of items: {len(info)}")
 
