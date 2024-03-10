@@ -24,7 +24,7 @@ typedef struct {
   const int trigger;
 } ultrasonic_pins_t;
 
-constexpr int moving_average_window_size = 30;
+constexpr int moving_average_window_size = 10;
 
 // Moving average container
 typedef struct {
@@ -51,7 +51,7 @@ typedef struct {
   filtered_data_t actual_position;
   int input_limits[2];
   int output_limits[2];
-  volatile bool gain_set_state;
+  volatile bool *gain_set_state;
   void (*command_handler)(int command);
   input_command_interface_t *command_interface;
 } system_interface_t;
@@ -100,7 +100,7 @@ constexpr int beam_ultrasonic_sensor_trigger     = 14;
 constexpr int beam_ultrasonic_sensor_echo        = 15;
 
 // Max kp, ki, kd values
-constexpr double kp_fan_max = 10.0;
+constexpr double kp_fan_max = 25.0;
 constexpr double ki_fan_max = 1.0;
 constexpr double kd_fan_max = 100.0;
 constexpr double kp_beam_max = 10.0;
@@ -126,8 +126,8 @@ constexpr float button_debounce_duration_ms      = 1000.0;
 // Beam
 Servo beam_servo;
 constexpr int beam_home_position                = 121;
-constexpr float feed_forward_slope              = 0.0;
-constexpr float feed_forward_offset             = 30.0;
+constexpr float feed_forward_slope              = -2.0;
+constexpr float feed_forward_offset             = 175.0;
 
 unsigned long ts;
 constexpr int loop_rate_ms = 50.0;
@@ -136,13 +136,17 @@ static input_command_interface_t fan_command_interface = INIT_COMMAND_INTERFACE(
 static input_command_interface_t beam_command_interface = INIT_COMMAND_INTERFACE(beam);
 
 void fan_command_callback(int command) { 
-  analogWrite(fan_command_interface.command_input, command);
+  analogWrite(fan_pwm_out, command);
 }
+
 void beam_command_callback(int command) { 
   beam_servo.write(beam_home_position - command);
 }
 
-static system_interface_t fan_system_interface = {
+volatile bool fan_state = false;
+volatile bool beam_state = false;
+
+system_interface_t fan_system_interface = {
   .position_sensor = UltraSonicDistanceSensor(
     fan_command_interface.position_input.trigger,
     fan_command_interface.position_input.echo
@@ -150,19 +154,21 @@ static system_interface_t fan_system_interface = {
   .controller = PID(
     0, 
     0, 
-    0
+    0,
+    NEGATIVE,
+    &compute_feed_forward
   ),
   .button_debounce_timer = Timer(button_debounce_duration_ms, MILLISECONDS),
   .target_position = 0,
   .actual_position = { .index = -1 }, // TODO: why does macro init fail?
   .input_limits = fan_position_limits,
   .output_limits = fan_pid_limits,
-  .gain_set_state = true,
+  .gain_set_state = &fan_state,
   .command_handler = &fan_command_callback,
   .command_interface = &fan_command_interface,
 };
 
-static system_interface_t beam_system_interface = {
+system_interface_t beam_system_interface = {
   .position_sensor = UltraSonicDistanceSensor(
     beam_command_interface.position_input.trigger,
     beam_command_interface.position_input.echo
@@ -170,14 +176,15 @@ static system_interface_t beam_system_interface = {
   .controller = PID(
     0, 
     0, 
-    0
+    0,
+    NEGATIVE
   ),
   .button_debounce_timer = Timer(button_debounce_duration_ms, MILLISECONDS),
   .target_position = 0,
   .actual_position = { .index = -1 }, // TODO: why does macro init fail?
   .input_limits = beam_position_limits,
   .output_limits = servo_limits,
-  .gain_set_state = true,
+  .gain_set_state = &beam_state,
   .command_handler = &beam_command_callback,
   .command_interface = &beam_command_interface,
 };
@@ -196,7 +203,7 @@ void setup() {
 
   // Attach interrupts. Has to be done individually w/ current setup since debounce timers are decoupled...
   attachInterrupt(digitalPinToInterrupt(fan_system_interface.command_interface->gain_edit_input), toggle_fan_edit_gains, FALLING);
-  attachInterrupt(digitalPinToInterrupt(beam_system_interface.command_interface->gain_edit_input), toggle_beam_edit_gains, FALLING);
+  //attachInterrupt(digitalPinToInterrupt(beam_system_interface.command_interface->gain_edit_input), toggle_beam_edit_gains, FALLING);
 
   // Set servo to home position
   beam_servo.attach(bean_servo_pin);
@@ -210,14 +217,14 @@ void loop() {
 
   for (system_interface_t &interface : interfaces) {
     /* Update gains if state allows */
-    if (interface.gain_set_state) {
+    if (*interface.gain_set_state) {
       update_gains(&interface);
     }
     
     /* Get target position, either from user input or from previous system */
     if (first_run) {
       interface.target_position = map(analogRead(interface.command_interface->command_input), 0, 1023, interface.input_limits[0], interface.input_limits[1]);
-      first_run = true;
+      first_run = false;
     } else {
       interface.target_position = target_position;
     }
@@ -226,7 +233,7 @@ void loop() {
     filter_data(&interface.actual_position, interface.position_sensor.measureDistanceCm());
 
     /* Compute PID */
-    interface.controller.Step(loop_rate_ms, interface.target_position, interface.actual_position.filtered);
+    interface.controller.Step(loop_rate_ms * 0.001, interface.actual_position.filtered, interface.target_position);
 
     /* Send clamped output to command handler */
     interface.command_handler(interface.controller.GetClampedOutput(interface.output_limits[0], interface.output_limits[1]));
@@ -248,31 +255,34 @@ void loop() {
 }
 
 void log_data(system_interface_t *interface) {
+  auto gains = interface->controller.GetGains();
+  auto contributions = interface->controller.GetContributions();
   LOG(interface->target_position);
   LOG(interface->actual_position.filtered);
-  LOG(interface->controller.GetGains().kp);
-  LOG(interface->controller.GetGains().ki);
-  LOG(interface->controller.GetGains().kd);
-  LOG(interface->controller.GetKpContribution());
-  LOG(interface->controller.GetKiContribution());
-  LOG(interface->controller.GetKdContribution());
+  LOG(gains.kp);
+  LOG(gains.ki);
+  LOG(gains.kd);
+  LOG(contributions.kp);
+  LOG(contributions.ki);
+  LOG(contributions.kd);
+  LOG(contributions.ff);
 }
 
 void update_gains(system_interface_t *interface) {
-  float kp_ = analogRead(interface->command_interface->gains.kp_in) / interface->command_interface->max_gains.kp_max;
-  float ki_ = analogRead(interface->command_interface->gains.ki_in) / interface->command_interface->max_gains.ki_max;
-  float kd_ = analogRead(interface->command_interface->gains.kd_in) / interface->command_interface->max_gains.kd_max;
+  float kp_ = analogRead(interface->command_interface->gains.kp_in) / 1023.0 * interface->command_interface->max_gains.kp_max;
+  float ki_ = analogRead(interface->command_interface->gains.ki_in) / 1023.0 * interface->command_interface->max_gains.ki_max;
+  float kd_ = analogRead(interface->command_interface->gains.kd_in) / 1023.0 * interface->command_interface->max_gains.kd_max;
   interface->controller.SetGains(
     kp_, 
     ki_, 
     kd_,
-    ki_ == interface->controller.GetGains().ki ? false : true
+    false
   );
 }
 
-float compute_feed_forward(float dist) {
+double compute_feed_forward(double dist) {
   // range: 30-330
-  return max(0.0, (330-dist)*feed_forward_slope + feed_forward_offset);
+  return max(0.0, dist*feed_forward_slope + feed_forward_offset);
 }
 
 void filter_data(filtered_data_t *data, float new_val) {
@@ -301,7 +311,7 @@ void filter_data(filtered_data_t *data, float new_val) {
 
 void _handle_gain_interrupt(system_interface_t *interface) {
   if (interface->button_debounce_timer.IsComplete()) {
-    interface->gain_set_state = !interface->gain_set_state;
+    *interface->gain_set_state = !(*interface->gain_set_state);
     interface->button_debounce_timer.Start();
   }
 }
