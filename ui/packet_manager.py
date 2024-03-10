@@ -31,10 +31,14 @@ class QueueContainer(NamedTuple):
 num_items = len(SystemPacket.__match_args__)
 
 class PacketManager:
-    def __init__(self, queues: QueueContainer) -> None:
+    def __init__(self, queues: QueueContainer, simulated: bool = False) -> None:
         self._fan_queue = queues.fan
         self._beam_queue = queues.beam
-        self._com = serial.Serial(port = "COM3", baudrate = 115200)
+        self._simulated = simulated
+
+        self._com: serial.Serial = None
+        if not self._simulated:
+            self._com = serial.Serial(port = "COM3", baudrate = 115200)
         
     def run(self): 
         threading.Thread(target = self._poll, daemon = True).start()
@@ -56,8 +60,23 @@ class PacketManager:
     def _poll(self):
         while True:
             try:
-                buffer = self._com.readline()
-                info = buffer.decode().replace("\r\n", "").split(" ")
+                if self._simulated:
+                    info = [
+                        "0",
+                        "10",
+                        "10",
+                        "0",
+                        "0",
+                        "0",
+                        "5",
+                        "6",
+                        "7",
+                        "8",
+                        str(time.time())
+                    ]
+                else:
+                    buffer = self._com.readline()
+                    info = buffer.decode().replace("\r\n", "").split(" ")
                 if len(info) == num_items + 1:      # single system
                     if self._fan_queue is not None:
                         self._fan_queue.append(
@@ -68,7 +87,6 @@ class PacketManager:
                         self._fan_queue.append(
                             self._populate_packet(info = info, offset = 0)
                         )
-                        print(self._fan_queue)
                         
                     if self._beam_queue is not None:
                         self._beam_queue.append(

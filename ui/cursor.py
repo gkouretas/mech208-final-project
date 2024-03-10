@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import sys
-import timeit
+import time
 from PyQt5 import QtWidgets, QtCore
-from packet_manager import QueueContainer, PacketManager
-
+from packet_manager import QueueContainer, PacketManager, SystemPacket, SystemType
+from typing import NamedTuple
 from collections import deque
 import pyqtgraph as pg
 
@@ -14,28 +14,106 @@ _ALLOWABLE_LIMITS = (5, 25)     # "allowable" limits (how far we allow our comma
 _WORKSPACE_LIMITS = (0, 35)     # "workspace" limits (how far we expect the ball CAN go)
 _TIMEOUT = 1.0 / 60.0           # 1/2 FPS
 
+class PlotContainer(NamedTuple):
+    kp: pg.PlotDataItem
+    ki: pg.PlotDataItem
+    kd: pg.PlotDataItem
+    ff: pg.PlotDataItem
+
+class ContribContainer(NamedTuple):
+    kp: deque
+    ki: deque
+    kd: deque
+    ff: deque
+
+class ContributionPlots:
+    def __init__(self, fan_widget: pg.PlotWidget, beam_widget: pg.PlotWidget) -> None:
+        fan_widget.addLegend()
+        self.fan = PlotContainer(
+            fan_widget.plot(symbol = 'o', pen = 'r', symbolBrush = 'r', name="kp"),
+            fan_widget.plot(symbol = 'o', pen = 'g', symbolBrush = 'g', name="ki"),
+            fan_widget.plot(symbol = 'o', pen = 'b', symbolBrush = 'b', name="kd"),
+            fan_widget.plot(symbol = 'o', pen = 'purple', symbolBrush = 'purple', name="ff")
+        )
+
+        self.fan_queue = ContribContainer(
+            deque(maxlen = 50),
+            deque(maxlen = 50),
+            deque(maxlen = 50),
+            deque(maxlen = 50)
+        )
+
+        self.beam = PlotContainer(
+            fan_widget.plot(symbol = 'o'),
+            fan_widget.plot(symbol = 'o'),
+            fan_widget.plot(symbol = 'o'),
+            fan_widget.plot(symbol = 'o')
+        )
+
+        self.beam_queue = ContribContainer(
+            deque(maxlen = 50),
+            deque(maxlen = 50),
+            deque(maxlen = 50),
+            deque(maxlen = 50)
+        )
+
+        self._time = deque(maxlen = 50)
+
+    def update_time(self): 
+        self._time.append(time.process_time())
+
+    def plot_data(self, data: SystemPacket):
+        if data.sys == SystemType.FAN:
+            plot_ = self.fan
+            queue_ = self.fan_queue
+        elif data.sys == SystemType.BEAM:
+            plot_ = self.beam
+            queue_ = self.beam_queue
+        for plot, q, contrib in zip(plot_, queue_, (data.kp_contrib, data.ki_contrib, data.kd_contrib, data.ff_contrib)):
+            q.append(contrib)
+            plot.setData(self._time, q)
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, queues: QueueContainer, *args, **kwargs):
         self._app = QtWidgets.QApplication([])
-        self._queues = queues
         super().__init__(*args, **kwargs)
+        self._queues = queues
+
+        self.plot_widget = QtWidgets.QWidget()
 
         self._is_started = False
 
-        self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setRange(
+        self._layout = QtWidgets.QGridLayout(self.plot_widget)
+        self.setLayout(self._layout)
+
+        self.ball_plot_widget = pg.PlotWidget()
+        self.ball_plot_widget.setTitle("System Status/Command")
+        self.ball_plot_widget.setRange(
             xRange = [-_WORKSPACE_LIMITS[1]/2, _WORKSPACE_LIMITS[1]/2], 
             yRange = _WORKSPACE_LIMITS
         )
 
-        self.setCentralWidget(self.plot_widget)
+        self.fan_contrib_plot_widget = pg.PlotWidget()
+        self.fan_contrib_plot_widget.setTitle("Fan Control Contributions")
+
+        self.beam_contrib_plot_widget = pg.PlotWidget()
+        self.beam_contrib_plot_widget.setTitle("Beam Control Contributions")
+
+        self.contrib_plots = ContributionPlots(self.fan_contrib_plot_widget, self.beam_contrib_plot_widget)
+        
+        self._layout.addWidget(self.ball_plot_widget, 0, self._layout.columnCount())
+        self._layout.addWidget(self.fan_contrib_plot_widget, 0, self._layout.columnCount())
+        self._layout.addWidget(self.beam_contrib_plot_widget, 0, self._layout.columnCount())
+
+        self.ball_plot_widget.addLegend()
 
         self.primary_position: pg.PlotDataItem = \
-            self.plot_widget.plot(
+            self.ball_plot_widget.plot(
                 symbol = 'o', 
-                symbolBrush = 'blue', 
+                symbolBrush = 'white', 
                 symbolSize = _BALL_RADIUS*2, 
-                pxMode = False
+                pxMode = False,
+                name = "Fan"
             )
         
         self.primary_position.setData(
@@ -43,11 +121,12 @@ class MainWindow(QtWidgets.QMainWindow):
         ) # start @ (0, 0) initially
 
         self.secondary_position: pg.PlotDataItem = \
-            self.plot_widget.plot(
+            self.ball_plot_widget.plot(
                 symbol = 'o', 
                 symbolBrush = 'yellow', 
                 symbolSize = _BALL_RADIUS*2, 
-                pxMode = False
+                pxMode = False,
+                name = "Beam"
             )
         
         self.secondary_position.setData(
@@ -55,34 +134,36 @@ class MainWindow(QtWidgets.QMainWindow):
         ) # start @ (0, 0) initially
 
         self.setpoint: pg.PlotDataItem = \
-            self.plot_widget.plot(pen = 'r', color = "red", symbolBrush = 'red')
+            self.ball_plot_widget.plot(pen = 'r', color = "red", symbolBrush = 'red', name = "Setpoint")
         self.setpoint.setData(
             [-_BALL_RADIUS, _BALL_RADIUS], [0, 0]
         ) # place setpoint @ (0,0) initially
 
         # Invert y-axis since distance sensor is pointed at the ground
-        self.plot_widget.getPlotItem().getViewBox().invertY(True)
+        self.ball_plot_widget.getPlotItem().getViewBox().invertY(True)
 
         # Boundaries of tube
         _left_outer_tube_plot: pg.PlotDataItem = \
-            self.plot_widget.plot()
+            self.ball_plot_widget.plot()
         _left_outer_tube_plot.setData([-_TUBE_RADIUS, -_TUBE_RADIUS], [_ALLOWABLE_LIMITS[0], _ALLOWABLE_LIMITS[1]])
 
         _right_outer_tube_plot: pg.PlotDataItem = \
-            self.plot_widget.plot()
+            self.ball_plot_widget.plot()
         _right_outer_tube_plot.setData([_TUBE_RADIUS, _TUBE_RADIUS], [_ALLOWABLE_LIMITS[0], _ALLOWABLE_LIMITS[1]])
 
-        self.plot_widget.setAspectLocked(True)
+        self.ball_plot_widget.setAspectLocked(True)
+
+        self.setCentralWidget(self.plot_widget)
     
     def update_plot(self):
         primary = None
         secondary = None
 
         for i, q in enumerate(self._queues):
-            entry = timeit.default_timer()
+            entry = time.process_time()
             if q is None: 
                 continue
-            while len(q) == 0 and timeit.default_timer() - entry < _TIMEOUT:
+            while len(q) == 0 and time.process_time() - entry < _TIMEOUT:
                 pass
             if len(q) == 0:
                 continue
@@ -90,10 +171,15 @@ class MainWindow(QtWidgets.QMainWindow):
             if i == 0: primary = q.pop()
             else: secondary = q.pop()
 
+        self.contrib_plots.update_time()
+
         if primary is not None:
             self.primary_position.setData([0], [primary.actual])
             self.setpoint.setData([-_BALL_RADIUS, _BALL_RADIUS], [primary.target, primary.target])
+            self.contrib_plots.plot_data(primary)
+
         if secondary is not None:
+            self.secondary_position.getData()
             self.secondary_position.setData([0], [secondary.actual])
 
     def run(self):
@@ -108,7 +194,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main():
     queues = QueueContainer(deque(maxlen = 1), deque(maxlen=1))
-    PacketManager(queues = queues).run()
+    PacketManager(queues = queues, simulated = False).run()
     main = MainWindow(
         queues = queues
     )
