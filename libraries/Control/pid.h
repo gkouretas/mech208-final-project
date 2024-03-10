@@ -46,13 +46,12 @@ class PID {
         double ComputeKpContribution();
         double ComputeKiContribution();
         double ComputeKdContribution();
-        double ComputeFeedForward();
+        double ComputeFeedForward(double actual);
 
         pid_gains_t gains_;
         sign_t sign_;
         pid_contrib_t contrib_;
         double (*ff_callback_)(double);
-        double actual_;
         double integral_sum_;
         double duration_;
         double ff_;

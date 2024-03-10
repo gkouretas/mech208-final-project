@@ -13,10 +13,9 @@ output_(0.0)
 {}
 
 void PID::Step(double dt, double actual, double command) { 
-    this->actual_ = actual;
     this->UpdateDuration(dt);
     this->UpdateError(sign_ * (command - actual));
-    this->output_ = this->ComputeKpContribution() + this->ComputeKiContribution() + this->ComputeKdContribution() + this->ComputeFeedForward(); 
+    this->output_ = this->ComputeKpContribution() + this->ComputeKiContribution() + this->ComputeKdContribution() + this->ComputeFeedForward(actual); 
 }
 
 void PID::SetGains(double kp, double ki, double kd, bool reset = true) {
@@ -53,11 +52,11 @@ double PID::ComputeKdContribution() {
     return this->contrib_.kd;
 }
 
-double PID::ComputeFeedForward() {
+double PID::ComputeFeedForward(double actual) {
     if (this->ff_callback_ == nullptr) {
         this->contrib_.ff = 0.0; // ff = 0 if no callback has been applied
     } else {
-        this->contrib_.ff = ff_callback_(this->actual_); // otherwise, run callback
+        this->contrib_.ff = ff_callback_(actual); // otherwise, run callback
     }
 
     return this->contrib_.ff;

@@ -5,9 +5,15 @@ import threading
 from typing import NamedTuple
 from collections import deque
 from dataclasses import dataclass
+from enum import Enum
+
+class SystemType(Enum):
+    FAN = 0
+    BEAM = 1
 
 @dataclass(frozen = True)
 class SystemPacket:
+    sys: SystemType
     target: float
     actual: float
     kp: float
@@ -35,15 +41,16 @@ class PacketManager:
 
     def _populate_packet(self, info: list, offset: int):
         return SystemPacket(
-            target      = float(info[offset]),
-            actual      = float(info[offset+1]),
-            kp          = float(info[offset+2]),
-            ki          = float(info[offset+3]),
-            kd          = float(info[offset+4]),
-            kp_contrib  = float(info[offset+5]),
-            ki_contrib  = float(info[offset+6]),
-            kd_contrib  = float(info[offset+7]),
-            ff_contrib  = float(info[offset+8])
+            sys         = SystemType(int(info[offset])),
+            target      = float(info[offset+1]),
+            actual      = float(info[offset+2]),
+            kp          = float(info[offset+3]),
+            ki          = float(info[offset+4]),
+            kd          = float(info[offset+5]),
+            kp_contrib  = float(info[offset+6]),
+            ki_contrib  = float(info[offset+7]),
+            kd_contrib  = float(info[offset+8]),
+            ff_contrib  = float(info[offset+9])
         )
 
     def _poll(self):

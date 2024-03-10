@@ -43,7 +43,13 @@ typedef struct {
   const int gain_edit_input;
 } input_command_interface_t;
 
+typedef enum {
+  FAN,
+  BEAM
+} system_type_t;
+
 typedef struct {
+  const system_type_t sys;
   UltraSonicDistanceSensor position_sensor;
   PID controller;
   Timer button_debounce_timer;
@@ -148,6 +154,7 @@ volatile bool fan_state = false;
 volatile bool beam_state = false;
 
 system_interface_t fan_system_interface = {
+  .sys = FAN,
   .position_sensor = UltraSonicDistanceSensor(
     fan_command_interface.position_input.trigger,
     fan_command_interface.position_input.echo
@@ -170,6 +177,7 @@ system_interface_t fan_system_interface = {
 };
 
 system_interface_t beam_system_interface = {
+  .sys = BEAM,
   .position_sensor = UltraSonicDistanceSensor(
     beam_command_interface.position_input.trigger,
     beam_command_interface.position_input.echo
@@ -279,7 +287,8 @@ void loop() {
 
 void log_data(system_interface_t *interface) {
   auto gains = interface->controller.GetGains();
-  auto contributions = interface->controller.GetContributions();
+  auto contributions = interface->controller.GetContributions();  
+  LOG(interface->sys);
   LOG(interface->target_position);
   LOG(interface->actual_position.filtered);
   LOG(gains.kp);
