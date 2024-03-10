@@ -47,7 +47,7 @@ typedef struct {
   UltraSonicDistanceSensor position_sensor;
   PID controller;
   Timer button_debounce_timer;
-  float target_position; // TODO: filter?
+  filtered_data_t target_position; // TODO: filter?
   filtered_data_t actual_position;
   int input_limits[2];
   int output_limits[2];
@@ -143,6 +143,7 @@ void beam_command_callback(int command) {
   beam_servo.write(beam_home_position - command);
 }
 
+/* Volatile booleans for interrupt. Need to be defined external from struct to work... */
 volatile bool fan_state = false;
 volatile bool beam_state = false;
 
@@ -156,10 +157,10 @@ system_interface_t fan_system_interface = {
     0, 
     0,
     NEGATIVE,
-    &compute_feed_forward
+    &compute_fan_feed_forward
   ),
   .button_debounce_timer = Timer(button_debounce_duration_ms, MILLISECONDS),
-  .target_position = 0,
+  .target_position = { .index = -1 },
   .actual_position = { .index = -1 }, // TODO: why does macro init fail?
   .input_limits = fan_position_limits,
   .output_limits = fan_pid_limits,
@@ -180,7 +181,7 @@ system_interface_t beam_system_interface = {
     NEGATIVE
   ),
   .button_debounce_timer = Timer(button_debounce_duration_ms, MILLISECONDS),
-  .target_position = 0,
+  .target_position = { .index = -1 },
   .actual_position = { .index = -1 }, // TODO: why does macro init fail?
   .input_limits = beam_position_limits,
   .output_limits = servo_limits,
@@ -216,31 +217,53 @@ void loop() {
   bool first_run = true;
 
   for (system_interface_t &interface : interfaces) {
-    /* Update gains if state allows */
+    /* Update gains if state allows it */
     if (*interface.gain_set_state) {
       update_gains(&interface);
     }
     
     /* Get target position, either from user input or from previous system */
     if (first_run) {
-      interface.target_position = map(analogRead(interface.command_interface->command_input), 0, 1023, interface.input_limits[0], interface.input_limits[1]);
+      /* Read target position from input, filter to avoid discontinuities */
+      filter_data(
+        &interface.target_position, 
+        map(
+          analogRead(interface.command_interface->command_input), 
+          0, 
+          1023, 
+          interface.input_limits[0], 
+          interface.input_limits[1]
+        )
+      );
       first_run = false;
     } else {
-      interface.target_position = target_position;
+      /* Pass previous system's position */
+      interface.target_position.filtered = target_position;
     }
 
     /* Get actual position, put through moving average filter */
-    filter_data(&interface.actual_position, interface.position_sensor.measureDistanceCm());
+    filter_data(
+      &interface.actual_position, 
+      interface.position_sensor.measureDistanceCm()
+    );
 
     /* Compute PID */
-    interface.controller.Step(loop_rate_ms * 0.001, interface.actual_position.filtered, interface.target_position);
+    interface.controller.Step(
+      loop_rate_ms * 0.001, // [ms] -> [s]
+      interface.actual_position.filtered, 
+      interface.target_position.filtered
+    );
 
     /* Send clamped output to command handler */
-    interface.command_handler(interface.controller.GetClampedOutput(interface.output_limits[0], interface.output_limits[1]));
+    interface.command_handler(
+      interface.controller.GetClampedOutput(
+        interface.output_limits[0], 
+        interface.output_limits[1]
+      )
+    );
 
     /* Set target position for next system to the actual position of this one */
-    target_position = interface.actual_position.filtered; // TODO: use raw position?
-                                                          // TODO: scaling?
+    target_position = interface.actual_position.filtered;
 
     /* Log data */
     log_data(&interface);
@@ -280,31 +303,42 @@ void update_gains(system_interface_t *interface) {
   );
 }
 
-double compute_feed_forward(double dist) {
-  // range: 30-330
+double compute_fan_feed_forward(double dist) {
+  /* Linear feed-forward. Enforce output is >= 0, since fan is always trying to push ball. */
   return max(0.0, dist*feed_forward_slope + feed_forward_offset);
 }
 
 void filter_data(filtered_data_t *data, float new_val) {
-  // Shoutout to Manoj for the suggestion
+  /* Pass input to "raw" field */
   data->raw = new_val;
+
   if (data->index != moving_average_window_size-1) {
-    data->filtered = 0.0;                                                 // reset filtered output to zero
-    /* If moving average buffer is not full, average the values in the buffer */
-    data->buffer[++data->index] = new_val;         // append buffer with current value
+    /* Case: buffer is not full */
+    /* Reset filtered output to zero */
+    data->filtered = 0.0;                                                 
+
+    /* Emplace current sample to next "empty" index */
+    data->buffer[++data->index] = data->raw;
+
+    /* Sum values in buffer, divide by # of samples (index+1) */         
     for (int i = 0; i <= data->index; ++i) {
-      data->filtered += data->buffer[i];                  // sum values in array
+      data->filtered += data->buffer[i];                  
     }
-    data->filtered /= (data->index+1);                           // divide by number of samples
+    data->filtered /= (data->index+1);                           
   } else {
-    /* Shift buffer and sum N most recent values */
-    data->filtered = new_val;                               // reset filtered output to current value
+    /* Case: buffer is full */
+    /* Assign filter to the current value, since that will not be included in loop below */
+    data->filtered = data->raw;          
+
+    /* Shift buffer and sum N most recent values. Divide by window size to compute average */                     
     for (int i = 1; i < moving_average_window_size; ++i) {
-      data->buffer[i-1] = data->buffer[i];                // shift buffer over
+      data->buffer[i-1] = data->buffer[i];                
       data->filtered += data->buffer[i-1];
     }
-    data->buffer[moving_average_window_size-1] = new_val;   // append buffer with current value
-    data->filtered /= moving_average_window_size;                         // divide by number of samples
+    data->filtered /= moving_average_window_size;
+
+    /* Append buffer with current value */
+    data->buffer[moving_average_window_size-1] = data->raw;   
   }
 }
 
