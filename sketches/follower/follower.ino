@@ -131,7 +131,7 @@ constexpr float button_debounce_duration_ms      = 1000.0;
 
 // Beam
 Servo beam_servo;
-constexpr int beam_home_position                = 121;
+constexpr int beam_home_position                = 94;
 constexpr float feed_forward_slope              = -2.0;
 constexpr float feed_forward_offset             = 175.0;
 
@@ -198,7 +198,7 @@ system_interface_t beam_system_interface = {
   .command_interface = &beam_command_interface,
 };
 
-system_interface_t interfaces[1] = {fan_system_interface}; 
+system_interface_t interfaces[2] = {fan_system_interface, beam_system_interface};
 
 void setup() {
   // put your setup code here, to run once:
@@ -212,7 +212,7 @@ void setup() {
 
   // Attach interrupts. Has to be done individually w/ current setup since debounce timers are decoupled...
   attachInterrupt(digitalPinToInterrupt(fan_system_interface.command_interface->gain_edit_input), toggle_fan_edit_gains, FALLING);
-  //attachInterrupt(digitalPinToInterrupt(beam_system_interface.command_interface->gain_edit_input), toggle_beam_edit_gains, FALLING);
+  attachInterrupt(digitalPinToInterrupt(beam_system_interface.command_interface->gain_edit_input), toggle_beam_edit_gains, FALLING);
 
   // Set servo to home position
   beam_servo.attach(bean_servo_pin);
@@ -221,7 +221,7 @@ void setup() {
 
 void loop() {
   ts = millis();
-  int target_position;
+  double target_position;
   bool first_run = true;
 
   for (system_interface_t &interface : interfaces) {
