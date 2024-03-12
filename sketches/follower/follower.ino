@@ -2,6 +2,10 @@
 #include <pid.h>
 #include <Timer.h>
 #include <Servo.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27,20,4);
 
 /* Helper structs */
 
@@ -204,6 +208,12 @@ void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
 
+  // LCD setup
+  lcd.init(); 
+  lcd.backlight();
+  lcd.setCursor(0,0);
+  lcd.print("Device Addr = 0x27");
+  
   // Initialize interfaces
   for (system_interface_t &interface : interfaces) {
     pinMode(interface.command_interface->gain_edit_input, INPUT_PULLUP);
@@ -283,6 +293,29 @@ void loop() {
   unsigned long duration = (millis() - ts);
   if (duration < loop_rate_ms)
     delay(loop_rate_ms - duration);
+
+  /* Display gains */
+  lcdPrint();
+}
+
+void lcdPrint() {
+  auto gains = interface->controller.GetGains();
+  
+  lcd.setCursor(0, 0);
+  lcd.print("   Kp/   Ki/   Kd");
+
+  system_interface_t *interface;
+  for (int i=0; i<2; i++) {
+    lcd.setCursor(0, i+1);
+
+    interface = &(interfaces[i]);
+    auto gains = interface->controller.GetGains();
+    lcd.print(String(gains.kp, 5));
+    lcd.print("/");
+    lcd.print(String(gains.ki, 5));
+    lcd.print("/");
+    lcd.print(String(gains.kd, 5));
+  }
 }
 
 void log_data(system_interface_t *interface) {
