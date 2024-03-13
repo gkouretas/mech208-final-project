@@ -5,7 +5,7 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
-LiquidCrystal_I2C lcd(0x27,20,4);
+LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 /* Helper structs */
 
@@ -44,7 +44,6 @@ typedef struct {
   const pid_gains_max_t max_gains;
   const ultrasonic_pins_t position_input;
   const int command_input;
-  const int gain_edit_input;
 } input_command_interface_t;
 
 typedef enum {
@@ -56,17 +55,17 @@ typedef struct {
   const system_type_t sys;
   UltraSonicDistanceSensor position_sensor;
   PID controller;
-  Timer button_debounce_timer;
   filtered_data_t target_position; // TODO: filter?
   filtered_data_t actual_position;
   int input_limits[2];
   int output_limits[2];
-  volatile bool *gain_set_state;
   void (*command_handler)(int command);
   input_command_interface_t *command_interface;
 } system_interface_t;
 
 /* Macros */
+// Constants
+#define NUMBER_OF_SYSTEMS 2 
 
 // Struct initializers
 #define INIT_COMMAND_INTERFACE(SYSTEM)                                                                                \
@@ -74,7 +73,6 @@ typedef struct {
     .max_gains = { kp_##SYSTEM##_max, ki_##SYSTEM##_max, kd_##SYSTEM##_max },                                         \
     .position_input = { .echo = SYSTEM##_ultrasonic_sensor_echo, .trigger = SYSTEM##_ultrasonic_sensor_trigger },     \
     .command_input = pot_##SYSTEM##_command_input,                                                                    \
-    .gain_edit_input = SYSTEM##_gain_state_input_toggle                                                               \
   }
 
 #define INIT_FILTERED_DATA { .index = -1 }
@@ -94,48 +92,57 @@ typedef struct {
 /* Pinouts */
 
 // System-related
-constexpr int kp_fan_input                       = A0;
-constexpr int ki_fan_input                       = A1;
-constexpr int kd_fan_input                       = A2;
-constexpr int pot_fan_command_input              = A3;
-constexpr int fan_gain_state_input_toggle        = 18;
+constexpr int kp_fan_input                       = A1;
+constexpr int ki_fan_input                       = A2;
+constexpr int kd_fan_input                       = A3;
+constexpr int pot_fan_command_input              = A0;
 constexpr int fan_ultrasonic_sensor_trigger      = 12;
 constexpr int fan_ultrasonic_sensor_echo         = 13;
 constexpr int kp_beam_input                      = A4;
 constexpr int ki_beam_input                      = A5;
 constexpr int kd_beam_input                      = A6;
-constexpr int pot_beam_command_input             = A7;
-constexpr int beam_gain_state_input_toggle       = 19;
+constexpr int pot_beam_command_input             = A0;
 constexpr int beam_ultrasonic_sensor_trigger     = 14;
 constexpr int beam_ultrasonic_sensor_echo        = 15;
+
+constexpr int gain_input_toggle           = 18;
+constexpr int enable_input_toggle         = 19;
+constexpr int primary_input_toggle        = 2;
 
 // Max kp, ki, kd values
 constexpr double kp_fan_max = 25.0;
 constexpr double ki_fan_max = 1.0;
-constexpr double kd_fan_max = 100.0;
+constexpr double kd_fan_max = 35.0;
 constexpr double kp_beam_max = 10.0;
 constexpr double ki_beam_max = 1.0;
-constexpr double kd_beam_max = 100.0;
+constexpr double kd_beam_max = 35.0;
 
 // Additional pins
-constexpr int fan_pwm_out                        = 8;
+constexpr int fan_pwm_out                        = 10;
 constexpr int bean_servo_pin                     = 9;
-constexpr int led_disable_mods                   = 53;
-constexpr int led_enable_mods                    = 51;
+constexpr int led_gains                          = 51;
+constexpr int led_enable                         = 43;
+constexpr int led_fan_primary                    = 49;
+constexpr int led_beam_primary                   = 45;
+
+constexpr int lcd_decimation = 5;
 
 // Button debounce
 constexpr float button_debounce_duration_ms      = 1000.0;
+Timer gain_input_timer(button_debounce_duration_ms, MILLISECONDS);
+Timer enable_input_timer(button_debounce_duration_ms, MILLISECONDS);
+Timer primary_input_timer(button_debounce_duration_ms, MILLISECONDS);
 
 /* Configuration params */
 // Fan
 #define fan_pid_limits        {0, 255}
-#define servo_limits          {-59, 59}
+#define servo_limits          {-90, 90}
 #define fan_position_limits   {5, 30}
 #define beam_position_limits  {5, 30}
 
 // Beam
 Servo beam_servo;
-constexpr int beam_home_position                = 94;
+constexpr int beam_home_position                = 90;
 constexpr float feed_forward_slope              = -2.0;
 constexpr float feed_forward_offset             = 175.0;
 
@@ -154,8 +161,9 @@ void beam_command_callback(int command) {
 }
 
 /* Volatile booleans for interrupt. Need to be defined external from struct to work... */
-volatile bool fan_state = false;
-volatile bool beam_state = false;
+volatile bool gain_state = false;
+volatile bool enable_state = false;
+volatile bool primary_state = true;
 
 system_interface_t fan_system_interface = {
   .sys = FAN,
@@ -170,12 +178,10 @@ system_interface_t fan_system_interface = {
     NEGATIVE,
     &compute_fan_feed_forward
   ),
-  .button_debounce_timer = Timer(button_debounce_duration_ms, MILLISECONDS),
   .target_position = { .index = -1 },
   .actual_position = { .index = -1 }, // TODO: why does macro init fail?
   .input_limits = fan_position_limits,
   .output_limits = fan_pid_limits,
-  .gain_set_state = &fan_state,
   .command_handler = &fan_command_callback,
   .command_interface = &fan_command_interface,
 };
@@ -192,17 +198,23 @@ system_interface_t beam_system_interface = {
     0,
     NEGATIVE
   ),
-  .button_debounce_timer = Timer(button_debounce_duration_ms, MILLISECONDS),
   .target_position = { .index = -1 },
   .actual_position = { .index = -1 }, // TODO: why does macro init fail?
   .input_limits = beam_position_limits,
   .output_limits = servo_limits,
-  .gain_set_state = &beam_state,
   .command_handler = &beam_command_callback,
   .command_interface = &beam_command_interface,
 };
 
-system_interface_t interfaces[2] = {fan_system_interface, beam_system_interface};
+system_interface_t interfaces[NUMBER_OF_SYSTEMS] = {fan_system_interface, beam_system_interface};
+
+system_interface_t* get_interface(system_type_t system_type) {
+  for (system_interface_t &interface : interfaces) {
+    if (interface.sys == system_type) return &interface;
+  }
+
+  return NULL;
+}
 
 void setup() {
   // put your setup code here, to run once:
@@ -215,14 +227,24 @@ void setup() {
   lcd.print("Device Addr = 0x27");
   
   // Initialize interfaces
-  for (system_interface_t &interface : interfaces) {
-    pinMode(interface.command_interface->gain_edit_input, INPUT_PULLUP);
-    interface.button_debounce_timer.Start();
-  }
+  pinMode(gain_input_toggle, INPUT_PULLUP);
+  gain_input_timer.Start();
+
+  pinMode(enable_input_toggle, INPUT_PULLUP);
+  enable_input_timer.Start();
+
+  pinMode(primary_input_toggle, INPUT_PULLUP);
+  primary_input_timer.Start();
+
+  pinMode(led_gains, OUTPUT);
+  pinMode(led_enable, OUTPUT);
+  pinMode(led_fan_primary, OUTPUT);
+  pinMode(led_beam_primary, OUTPUT);
 
   // Attach interrupts. Has to be done individually w/ current setup since debounce timers are decoupled...
-  attachInterrupt(digitalPinToInterrupt(fan_system_interface.command_interface->gain_edit_input), toggle_fan_edit_gains, FALLING);
-  attachInterrupt(digitalPinToInterrupt(beam_system_interface.command_interface->gain_edit_input), toggle_beam_edit_gains, FALLING);
+  attachInterrupt(digitalPinToInterrupt(gain_input_toggle), toggle_edit_gains, FALLING);
+  attachInterrupt(digitalPinToInterrupt(enable_input_toggle), toggle_edit_enable, FALLING);
+  attachInterrupt(digitalPinToInterrupt(primary_input_toggle), toggle_edit_primary, FALLING);
 
   // Set servo to home position
   beam_servo.attach(bean_servo_pin);
@@ -230,92 +252,161 @@ void setup() {
 }
 
 void loop() {
+  static unsigned long iter = 0;
   ts = millis();
   double target_position;
-  bool first_run = true;
+  // bool first_run = true;
+
+  update_sensed_and_targets();
 
   for (system_interface_t &interface : interfaces) {
     /* Update gains if state allows it */
-    if (*interface.gain_set_state) {
+    if (gain_state) {
       update_gains(&interface);
     }
     
-    /* Get target position, either from user input or from previous system */
-    if (first_run) {
-      /* Read target position from input, filter to avoid discontinuities */
-      filter_data(
-        &interface.target_position, 
-        map(
-          analogRead(interface.command_interface->command_input), 
-          0, 
-          1023, 
-          interface.input_limits[0], 
-          interface.input_limits[1]
-        )
-      );
-      first_run = false;
-    } else {
-      /* Pass previous system's position */
-      interface.target_position.filtered = target_position;
-    }
+    // /* Get target position, either from user input or from previous system */
+    // if (first_run) {
+    //   /* Read target position from input, filter to avoid discontinuities */
+    //   filter_data(
+    //     &interface.target_position, 
+    //     map(
+    //       analogRead(interface.command_interface->command_input), 
+    //       0, 
+    //       1023, 
+    //       interface.input_limits[0], 
+    //       interface.input_limits[1]
+    //     )
+    //   );
+    //   first_run = false;
+    // } else {
+    //   /* Pass previous system's position */
+    //   interface.target_position.filtered = target_position;
+    // }
 
     /* Get actual position, put through moving average filter */
-    filter_data(
-      &interface.actual_position, 
-      interface.position_sensor.measureDistanceCm()
-    );
+    
 
-    /* Compute PID */
-    interface.controller.Step(
-      loop_rate_ms * 0.001, // [ms] -> [s]
-      interface.actual_position.filtered, 
-      interface.target_position.filtered
-    );
+    if (enable_state) {
+      /* Compute PID */
+      interface.controller.Step(
+        loop_rate_ms * 0.001, // [ms] -> [s]
+        interface.actual_position.filtered, 
+        interface.target_position.filtered
+      );
 
-    /* Send clamped output to command handler */
-    interface.command_handler(
-      interface.controller.GetClampedOutput(
-        interface.output_limits[0], 
-        interface.output_limits[1]
-      )
-    );
+      /* Send clamped output to command handler */
+      interface.command_handler(
+        interface.controller.GetClampedOutput(
+          interface.output_limits[0], 
+          interface.output_limits[1]
+        )
+      );
+    } else {
+      interface.command_handler(0);
+    }
 
     /* Set target position for next system to the actual position of this one */
     target_position = interface.actual_position.filtered;
 
     /* Log data */
     log_data(&interface);
-  }
+  } 
 
   LOGEOL(ts);
+
+  digitalWrite(led_gains, !gain_state);
+  digitalWrite(led_enable, enable_state);
+  digitalWrite(led_fan_primary, primary_state);
+  digitalWrite(led_beam_primary, !primary_state);
+
+  /* Display gains */
+  if (iter % lcd_decimation == 0) {
+    lcdPrint();
+  }
+
+  ++iter;
 
   /* Log timestamp, start newline in prep for next packet */
   unsigned long duration = (millis() - ts);
   if (duration < loop_rate_ms)
     delay(loop_rate_ms - duration);
-
-  /* Display gains */
-  lcdPrint();
 }
 
-void lcdPrint() {
-  auto gains = interface->controller.GetGains();
-  
+void lcdPrint() {  
   lcd.setCursor(0, 0);
-  lcd.print("   Kp/   Ki/   Kd");
+  lcd.print("   Kp/   Ki/   Kd   ");
 
-  system_interface_t *interface;
-  for (int i=0; i<2; i++) {
+  for (int i = 0; i < NUMBER_OF_SYSTEMS; i++) {
     lcd.setCursor(0, i+1);
 
-    interface = &(interfaces[i]);
-    auto gains = interface->controller.GetGains();
-    lcd.print(String(gains.kp, 5));
+    auto gains = interfaces[i].controller.GetGains();
+    lcd.print(String(gains.kp, 3));
     lcd.print("/");
-    lcd.print(String(gains.ki, 5));
+    lcd.print(String(gains.ki, 3));
     lcd.print("/");
-    lcd.print(String(gains.kd, 5));
+    lcd.print(String(gains.kd, 3));
   }
+}
+
+void update_sensed_and_targets() {
+  #if NUMBER_OF_SYSTEMS == 1
+  LOG(1);
+  filter_data(
+    &interfaces[0].target_position, 
+    map(
+      analogRead(interface.command_interface->command_input), 
+      0, 
+      1023, 
+      interface.input_limits[0], 
+      interface.input_limits[1]
+    )
+  );
+
+  filter_data(
+    &interfaces[0].actual_position, 
+    interfaces[0].position_sensor.measureDistanceCm()
+  );
+  #else
+  system_interface_t *primary_interface;
+  system_interface_t *secondary_interface;
+  LOG(primary_state);
+  if (primary_state) {
+    primary_interface = get_interface(FAN);
+    secondary_interface = get_interface(BEAM);
+  } else {
+    primary_interface = get_interface(BEAM);
+    secondary_interface = get_interface(FAN);
+  }
+
+  /* This should never happen, but in case it does... */
+  if (primary_interface == NULL || secondary_interface == NULL) {
+    return;
+  }
+
+  filter_data(
+    &primary_interface->target_position, 
+    map(
+      analogRead(primary_interface->command_interface->command_input), 
+      0, 
+      1023, 
+      primary_interface->input_limits[0], 
+      primary_interface->input_limits[1]
+    )
+  );
+
+  filter_data(
+    &primary_interface->actual_position, 
+    primary_interface->position_sensor.measureDistanceCm()
+  );
+
+  filter_data(
+    &secondary_interface->actual_position, 
+    secondary_interface->position_sensor.measureDistanceCm()
+  );
+
+  secondary_interface->target_position.filtered = primary_interface->actual_position.filtered;
+  #endif
 }
 
 void log_data(system_interface_t *interface) {
@@ -347,7 +438,7 @@ void update_gains(system_interface_t *interface) {
 
 double compute_fan_feed_forward(double dist) {
   /* Linear feed-forward. Enforce output is >= 0, since fan is always trying to push ball. */
-  return max(0.0, dist*feed_forward_slope + feed_forward_offset);
+  return enable_state ? max(0.0, dist*feed_forward_slope + feed_forward_offset) : 0.0;
 }
 
 void filter_data(filtered_data_t *data, float new_val) {
@@ -377,6 +468,7 @@ void filter_data(filtered_data_t *data, float new_val) {
       data->buffer[i-1] = data->buffer[i];                
       data->filtered += data->buffer[i-1];
     }
+    
     data->filtered /= moving_average_window_size;
 
     /* Append buffer with current value */
@@ -385,17 +477,23 @@ void filter_data(filtered_data_t *data, float new_val) {
 }
 
 
-void _handle_gain_interrupt(system_interface_t *interface) {
-  if (interface->button_debounce_timer.IsComplete()) {
-    *interface->gain_set_state = !(*interface->gain_set_state);
-    interface->button_debounce_timer.Start();
+void toggle_edit_gains() {
+  if (gain_input_timer.IsComplete()) {
+    gain_state = !gain_state;
+    gain_input_timer.Start();
   }
 }
 
-void toggle_fan_edit_gains() {
-  _handle_gain_interrupt(&fan_system_interface);
+void toggle_edit_enable() {
+  if (enable_input_timer.IsComplete()) {
+    enable_state = !enable_state;
+    enable_input_timer.Start();
+  }
 }
 
-void toggle_beam_edit_gains() {
-  _handle_gain_interrupt(&beam_system_interface);
+void toggle_edit_primary() {
+  if (primary_input_timer.IsComplete()) {
+    primary_state = !primary_state;
+    primary_input_timer.Start();
+  }
 }

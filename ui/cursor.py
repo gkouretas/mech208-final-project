@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+import copy
 from PyQt5 import QtWidgets, QtCore
 from packet_manager import QueueContainer, PacketManager, SystemPacket, SystemType
 from typing import NamedTuple
@@ -10,7 +11,7 @@ import pyqtgraph as pg
 
 _BALL_RADIUS = 2                # [cm]
 _TUBE_RADIUS = 2.25             # [cm]
-_ALLOWABLE_LIMITS = (5, 25)     # "allowable" limits (how far we allow our commands to go)
+_ALLOWABLE_LIMITS = (5, 30)     # "allowable" limits (how far we allow our commands to go)
 _WORKSPACE_LIMITS = (0, 35)     # "workspace" limits (how far we expect the ball CAN go)
 _TIMEOUT = 1.0 / 60.0           # 1/2 FPS
 
@@ -44,10 +45,10 @@ class ContributionPlots:
         )
 
         self.beam = PlotContainer(
-            fan_widget.plot(symbol = 'o'),
-            fan_widget.plot(symbol = 'o'),
-            fan_widget.plot(symbol = 'o'),
-            fan_widget.plot(symbol = 'o')
+            beam_widget.plot(symbol = 'o', pen = 'r', symbolBrush = 'r', name="kp"),
+            beam_widget.plot(symbol = 'o', pen = 'g', symbolBrush = 'g', name="ki"),
+            beam_widget.plot(symbol = 'o', pen = 'b', symbolBrush = 'b', name="kd"),
+            beam_widget.plot(symbol = 'o', pen = 'purple', symbolBrush = 'purple', name="ff")
         )
 
         self.beam_queue = ContribContainer(
@@ -57,21 +58,23 @@ class ContributionPlots:
             deque(maxlen = 50)
         )
 
-        self._time = deque(maxlen = 50)
+        self._time_fan = deque(maxlen = 50)
+        self._time_beam = deque(maxlen = 50)
 
-    def update_time(self): 
-        self._time.append(time.process_time())
-
-    def plot_data(self, data: SystemPacket):
+    def plot_data(self, data: SystemPacket, ts: float):
         if data.sys == SystemType.FAN:
             plot_ = self.fan
             queue_ = self.fan_queue
+            self._time_fan.append(ts)
+            time_ = self._time_fan
         elif data.sys == SystemType.BEAM:
             plot_ = self.beam
             queue_ = self.beam_queue
+            time_ = self._time_beam
+            self._time_beam.append(ts)
         for plot, q, contrib in zip(plot_, queue_, (data.kp_contrib, data.ki_contrib, data.kd_contrib, data.ff_contrib)):
             q.append(contrib)
-            plot.setData(self._time, q)
+            plot.setData(time_, q)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, queues: QueueContainer, *args, **kwargs):
@@ -110,7 +113,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.primary_position: pg.PlotDataItem = \
             self.ball_plot_widget.plot(
                 symbol = 'o', 
-                symbolBrush = 'white', 
+                symbolBrush = 'blue', 
                 symbolSize = _BALL_RADIUS*2, 
                 pxMode = False,
                 name = "Fan"
@@ -159,7 +162,7 @@ class MainWindow(QtWidgets.QMainWindow):
         primary = None
         secondary = None
 
-        for i, q in enumerate(self._queues):
+        for q in self._queues:
             entry = time.process_time()
             if q is None: 
                 continue
@@ -168,19 +171,26 @@ class MainWindow(QtWidgets.QMainWindow):
             if len(q) == 0:
                 continue
 
-            if i == 0: primary = q.pop()
-            else: secondary = q.pop()
-
-        self.contrib_plots.update_time()
+            data = q.pop()
+            if data.is_primary: 
+                primary = copy.deepcopy(data)
+            else: 
+                secondary = copy.deepcopy(data)
 
         if primary is not None:
-            self.primary_position.setData([0], [primary.actual])
+            if primary.sys == SystemType.FAN:
+                self.primary_position.setData([0], [primary.actual])
+            elif primary.sys == SystemType.BEAM:
+                self.secondary_position.setData([0], [primary.actual])
             self.setpoint.setData([-_BALL_RADIUS, _BALL_RADIUS], [primary.target, primary.target])
-            self.contrib_plots.plot_data(primary)
+            self.contrib_plots.plot_data(primary, primary.ts)
 
         if secondary is not None:
-            self.secondary_position.getData()
-            self.secondary_position.setData([0], [secondary.actual])
+            if secondary.sys == SystemType.FAN:
+                self.primary_position.setData([0], [secondary.actual])
+            elif secondary.sys == SystemType.BEAM:
+                self.secondary_position.setData([0], [secondary.actual])
+            self.contrib_plots.plot_data(secondary, secondary.ts)
 
     def run(self):
         # Plot refresh, update @ configured FPS
