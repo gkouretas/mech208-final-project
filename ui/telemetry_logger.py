@@ -10,11 +10,11 @@ import os
 import datetime
 
 class DataLogger:
-    def __init__(self, obj: object) -> None:
+    def __init__(self, name: str, obj: object) -> None:
         """Simple CSV logger for thermal chamber."""
         os.makedirs(os.path.join(os.getcwd(), "logs"), exist_ok = True)
         self.path = os.path.join(
-            os.getcwd(), "logs/temp_chamber_" + datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + ".csv"
+            os.getcwd(), f"logs/{name}_" + datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + ".csv"
         )
         
         self._lock = threading.RLock()

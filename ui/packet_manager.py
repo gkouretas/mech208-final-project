@@ -40,8 +40,8 @@ class PacketManager:
         self._beam_queue = queues.beam
         self._simulated = simulated
         
-        self._fan_logger = DataLogger(SystemPacket)
-        self._beam_logger = DataLogger(SystemPacket)
+        self._fan_logger = DataLogger("fan", SystemPacket)
+        self._beam_logger = DataLogger("beam", SystemPacket)
 
         self._com: serial.Serial = None
         if not self._simulated:

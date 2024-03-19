@@ -334,7 +334,7 @@ void lcdPrint() {
 
 void update_sensed_and_targets() {
   #if USE_TEMP_SENSOR
-  int current_temp = temp_sensor.readTemperature(); // TODO: decimate? filter?
+  int current_temp = temp_sensor.readTemperature(); // TODO: decimate? filter? run once?
   #endif
   #if NUMBER_OF_SYSTEMS == 1
   LOG(1); /* priamry state always == true with one system */
