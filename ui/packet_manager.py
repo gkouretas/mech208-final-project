@@ -1,11 +1,13 @@
 import serial
 import time
 import threading
+import copy
 
 from typing import NamedTuple
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
+from telemetry_logger import DataLogger
 
 class SystemType(Enum):
     FAN = 0
@@ -37,6 +39,9 @@ class PacketManager:
         self._fan_queue = queues.fan
         self._beam_queue = queues.beam
         self._simulated = simulated
+        
+        self._fan_logger = DataLogger(SystemPacket)
+        self._beam_logger = DataLogger(SystemPacket)
 
         self._com: serial.Serial = None
         if not self._simulated:
@@ -60,7 +65,19 @@ class PacketManager:
             ts          = float(info[ts_index if ts_index is not None else offset+10]),
             is_primary  = is_primary
         )
-
+        
+    def _process_packet(self, packet: SystemPacket):
+        if packet.sys == SystemType.FAN:
+            q = self._fan_queue
+            logger = self._fan_logger
+        else:
+            q = self._beam_queue
+            logger = self._beam_queue
+            
+        if q is not None: q.append(copy.deepcopy(packet))
+        
+        logger.log(copy.deepcopy(packet))
+        
     def _poll(self):
         while True:
             try:
@@ -76,6 +93,7 @@ class PacketManager:
                         "6",
                         "7",
                         "8",
+                        "9",
                         str(time.time())
                     ]
 
@@ -85,21 +103,15 @@ class PacketManager:
                     info = buffer.decode().replace("\r\n", "").split(" ")
                     is_primary = bool(int(info.pop(0)))
                 if len(info) == num_items + 1:      # single system
-                    if self._fan_queue is not None:
-                        self._fan_queue.append(
-                            self._populate_packet(info = info, offset = 0, is_primary = is_primary)
-                        )
-                elif len(info) == 2*num_items + 1:
-                    if self._fan_queue is not None:
-                        packet = self._populate_packet(info = info, offset = 0, ts_index = 2*num_items, is_primary = is_primary)
-                        self._fan_queue.append(
-                            packet
-                        )
+                    packet = self._populate_packet(info = info, offset = 0, is_primary = is_primary)
+                    self._process_packet(packet)
                         
-                    if self._beam_queue is not None:
-                        self._beam_queue.append(
-                            self._populate_packet(info = info, offset = num_items, is_primary = not is_primary)
-                        )
+                elif len(info) == 2*num_items + 1:
+                    packet = self._populate_packet(info = info, offset = 0, ts_index = 2*num_items, is_primary = is_primary)
+                    self._process_packet(packet)
+                    
+                    packet = self._populate_packet(info = info, offset = num_items, is_primary = not is_primary)
+                    self._process_packet(packet)
                         
                 else:
                     raise ValueError(f"Unexpected number of items: {len(info)}")

@@ -52,15 +52,15 @@ typedef enum {
 } system_type_t;
 
 typedef struct {
-  const system_type_t sys;
-  UltraSonicDistanceSensor position_sensor;
-  PID controller;
-  filtered_data_t target_position; // TODO: filter?
-  filtered_data_t actual_position;
-  int input_limits[2];
-  int output_limits[2];
-  void (*command_handler)(int command);
-  input_command_interface_t *command_interface;
+  const system_type_t sys;                        // enum: system type
+  UltraSonicDistanceSensor position_sensor;       // position sensor object
+  PID controller;                                 // PID controller
+  filtered_data_t target_position;                // target position
+  filtered_data_t actual_position;                // sensed position
+  int input_limits[2];                            // input min/max
+  int output_limits[2];                           // output min/max
+  void (*command_handler)(int command);           // callback for command
+  input_command_interface_t *command_interface;   // command interface containing IO pins
 } system_interface_t;
 
 /* Macros */
@@ -254,8 +254,6 @@ void setup() {
 void loop() {
   static unsigned long iter = 0;
   ts = millis();
-  double target_position;
-  // bool first_run = true;
 
   update_sensed_and_targets();
 
@@ -265,28 +263,6 @@ void loop() {
       update_gains(&interface);
     }
     
-    // /* Get target position, either from user input or from previous system */
-    // if (first_run) {
-    //   /* Read target position from input, filter to avoid discontinuities */
-    //   filter_data(
-    //     &interface.target_position, 
-    //     map(
-    //       analogRead(interface.command_interface->command_input), 
-    //       0, 
-    //       1023, 
-    //       interface.input_limits[0], 
-    //       interface.input_limits[1]
-    //     )
-    //   );
-    //   first_run = false;
-    // } else {
-    //   /* Pass previous system's position */
-    //   interface.target_position.filtered = target_position;
-    // }
-
-    /* Get actual position, put through moving average filter */
-    
-
     if (enable_state) {
       /* Compute PID */
       interface.controller.Step(
@@ -306,13 +282,11 @@ void loop() {
       interface.command_handler(0);
     }
 
-    /* Set target position for next system to the actual position of this one */
-    target_position = interface.actual_position.filtered;
-
     /* Log data */
     log_data(&interface);
   } 
 
+  /* Log timestamp, start newline in prep for next packet */
   LOGEOL(ts);
 
   digitalWrite(led_gains, !gain_state);
@@ -327,8 +301,9 @@ void loop() {
 
   ++iter;
 
-  /* Log timestamp, start newline in prep for next packet */
   unsigned long duration = (millis() - ts);
+
+  /* Enforce loop frequency */
   if (duration < loop_rate_ms)
     delay(loop_rate_ms - duration);
 }
@@ -351,7 +326,7 @@ void lcdPrint() {
 
 void update_sensed_and_targets() {
   #if NUMBER_OF_SYSTEMS == 1
-  LOG(1);
+  LOG(1); /* priamry state always == true with one system */
   filter_data(
     &interfaces[0].target_position, 
     map(
