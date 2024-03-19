@@ -4,6 +4,7 @@
 #include <Servo.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <DHT11.h>
 
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
@@ -66,6 +67,7 @@ typedef struct {
 /* Macros */
 // Constants
 #define NUMBER_OF_SYSTEMS 2 
+#define USE_TEMP_SENSOR true
 
 // Struct initializers
 #define INIT_COMMAND_INTERFACE(SYSTEM)                                                                                \
@@ -145,6 +147,12 @@ Servo beam_servo;
 constexpr int beam_home_position                = 90;
 constexpr float feed_forward_slope              = -2.0;
 constexpr float feed_forward_offset             = 175.0;
+
+// Temp/humidity sensor
+#if USE_TEMP_SENSOR
+constexpr int temp_sensor_pin = 4;
+DHT11 temp_sensor(temp_sensor_pin);
+#endif
 
 unsigned long ts;
 constexpr int loop_rate_ms = 50.0;
@@ -325,6 +333,9 @@ void lcdPrint() {
 }
 
 void update_sensed_and_targets() {
+  #if USE_TEMP_SENSOR
+  int current_temp = temp_sensor.readTemperature(); // TODO: decimate? filter?
+  #endif
   #if NUMBER_OF_SYSTEMS == 1
   LOG(1); /* priamry state always == true with one system */
   filter_data(
@@ -340,7 +351,11 @@ void update_sensed_and_targets() {
 
   filter_data(
     &interfaces[0].actual_position, 
+    #if USE_TEMP_SENSOR
+    interfaces[0].position_sensor.measureDistanceCm(current_temp)
+    #else
     interfaces[0].position_sensor.measureDistanceCm()
+    #endif
   );
   #else
   system_interface_t *primary_interface;
@@ -372,12 +387,20 @@ void update_sensed_and_targets() {
 
   filter_data(
     &primary_interface->actual_position, 
+    #if USE_TEMP_SENSOR
+    primary_interface->position_sensor.measureDistanceCm(current_temp)
+    #else
     primary_interface->position_sensor.measureDistanceCm()
+    #endif
   );
 
   filter_data(
     &secondary_interface->actual_position, 
+    #if USE_TEMP_SENSOR
+    secondary_interface->position_sensor.measureDistanceCm(current_temp)
+    #else
     secondary_interface->position_sensor.measureDistanceCm()
+    #endif
   );
 
   secondary_interface->target_position.filtered = primary_interface->actual_position.filtered;
