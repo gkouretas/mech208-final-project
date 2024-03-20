@@ -2,7 +2,7 @@
 George Kouretas
 MECH 208
 
-CSV logger for temperature data
+CSV logger for data
 """
 import csv
 import threading
@@ -29,14 +29,13 @@ class DataLogger:
         
         print(f"Logging to {self.path}")
         
-    def log(self, parsed_buffer):
+    def log(self, parsed_buffer: object):
         """Log data"""
-        self.writer.writerow(parsed_buffer)
+        self.writer.writerow(list(parsed_buffer.__dict__.values()))
+        self._fp.flush()
         
     def __del__(self):
         """Destructor. Flush and close file"""
         if not self._fp.closed:
             self._fp.flush()
             self._fp.close()
-            
-        

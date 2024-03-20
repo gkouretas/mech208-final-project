@@ -9,7 +9,8 @@ from typing import NamedTuple
 from collections import deque
 import pyqtgraph as pg
 
-_BALL_RADIUS = 2                # [cm]
+_FAN_BALL_RADIUS = 2                # [cm]
+_BEAM_BALL_RADIUS = 1                # [cm]
 _TUBE_RADIUS = 2.25             # [cm]
 _ALLOWABLE_LIMITS = (5, 30)     # "allowable" limits (how far we allow our commands to go)
 _WORKSPACE_LIMITS = (0, 35)     # "workspace" limits (how far we expect the ball CAN go)
@@ -29,7 +30,11 @@ class ContribContainer(NamedTuple):
 
 class ContributionPlots:
     def __init__(self, fan_widget: pg.PlotWidget, beam_widget: pg.PlotWidget) -> None:
+        self._fan_widget = fan_widget
+        self._beam_widget = beam_widget
+        
         fan_widget.addLegend()
+        beam_widget.addLegend()
         self.fan = PlotContainer(
             fan_widget.plot(symbol = 'o', pen = 'r', symbolBrush = 'r', name="kp"),
             fan_widget.plot(symbol = 'o', pen = 'g', symbolBrush = 'g', name="ki"),
@@ -43,6 +48,8 @@ class ContributionPlots:
             deque(maxlen = 50),
             deque(maxlen = 50)
         )
+
+        self.fan_values: list[pg.TextItem] = None
 
         self.beam = PlotContainer(
             beam_widget.plot(symbol = 'o', pen = 'r', symbolBrush = 'r', name="kp"),
@@ -58,23 +65,42 @@ class ContributionPlots:
             deque(maxlen = 50)
         )
 
+        self.beam_values: list[pg.TextItem] = None
+
         self._time_fan = deque(maxlen = 50)
         self._time_beam = deque(maxlen = 50)
 
-    def plot_data(self, data: SystemPacket, ts: float):
+    def plot_data(self, data: SystemPacket, ts: float):    
         if data.sys == SystemType.FAN:
             plot_ = self.fan
             queue_ = self.fan_queue
             self._time_fan.append(ts)
             time_ = self._time_fan
+            if self.fan_values is None:
+                self.fan_values = []
+                for c in ("r", "g", "b", "purple"):
+                    text_item = pg.TextItem("", anchor=(0, 0), color = "black", fill = c)
+                    self._fan_widget.addItem(text_item)
+                    self.fan_values.append(text_item)
+            values_ = self.fan_values
         elif data.sys == SystemType.BEAM:
             plot_ = self.beam
             queue_ = self.beam_queue
             time_ = self._time_beam
             self._time_beam.append(ts)
-        for plot, q, contrib in zip(plot_, queue_, (data.kp_contrib, data.ki_contrib, data.kd_contrib, data.ff_contrib)):
+            if self.beam_values is None:
+                self.beam_values = []
+                for c in ("r", "g", "b", "purple"):
+                    text_item = pg.TextItem("", anchor=(0, 0), color = "black", fill = c)
+                    self._beam_widget.addItem(text_item)
+                    self.beam_values.append(text_item)
+            values_ = self.beam_values
+        
+        for plot, q, contrib, text in zip(plot_, queue_, (data.kp_contrib, data.ki_contrib, data.kd_contrib, data.ff_contrib), values_):
             q.append(contrib)
             plot.setData(time_, q)
+            text.setPos(time_[-1] - 100.0, contrib)
+            text.setText(f"{contrib:.2f}")
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, queues: QueueContainer, *args, **kwargs):
@@ -114,7 +140,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ball_plot_widget.plot(
                 symbol = 'o', 
                 symbolBrush = 'blue', 
-                symbolSize = _BALL_RADIUS*2, 
+                symbolSize = _FAN_BALL_RADIUS*2, 
                 pxMode = False,
                 name = "Fan"
             )
@@ -123,11 +149,13 @@ class MainWindow(QtWidgets.QMainWindow):
             [0],[0]
         ) # start @ (0, 0) initially
 
+        self.primary_position_text: pg.TextItem = None
+
         self.secondary_position: pg.PlotDataItem = \
             self.ball_plot_widget.plot(
                 symbol = 'o', 
-                symbolBrush = 'yellow', 
-                symbolSize = _BALL_RADIUS*2, 
+                symbolBrush = 'gray', 
+                symbolSize = _BEAM_BALL_RADIUS*2, 
                 pxMode = False,
                 name = "Beam"
             )
@@ -136,11 +164,15 @@ class MainWindow(QtWidgets.QMainWindow):
             [0],[0.5]
         ) # start @ (0, 0) initially
 
+        self.secondary_position_text: pg.TextItem = None
+
         self.setpoint: pg.PlotDataItem = \
             self.ball_plot_widget.plot(pen = 'r', color = "red", symbolBrush = 'red', name = "Setpoint")
         self.setpoint.setData(
-            [-_BALL_RADIUS, _BALL_RADIUS], [0, 0]
+            [-_TUBE_RADIUS, _TUBE_RADIUS], [0, 0]
         ) # place setpoint @ (0,0) initially
+
+        self.setpoint_position_text: pg.TextItem = None
 
         # Invert y-axis since distance sensor is pointed at the ground
         self.ball_plot_widget.getPlotItem().getViewBox().invertY(True)
@@ -182,8 +214,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.primary_position.setData([0], [primary.actual])
             elif primary.sys == SystemType.BEAM:
                 self.secondary_position.setData([0], [primary.actual])
-            self.setpoint.setData([-_BALL_RADIUS, _BALL_RADIUS], [primary.target, primary.target])
+            self.setpoint.setData([-_TUBE_RADIUS, _TUBE_RADIUS], [primary.target, primary.target])
             self.contrib_plots.plot_data(primary, primary.ts)
+            if self.primary_position_text is None:
+                self.primary_position_text = pg.TextItem("", anchor=(0.5, 0.5), color = "black", fill = "white")
+                self.ball_plot_widget.addItem(self.primary_position_text)
+            self.primary_position_text.setPos(-2*_TUBE_RADIUS, primary.actual)
+            self.primary_position_text.setText(f"{primary.actual:.2f}")
+            # self.primary_position_text.setColor("blue" if primary.sys == SystemType.FAN else "gray")
+
+            if self.setpoint_position_text is None:
+                self.setpoint_position_text = pg.TextItem("", anchor=(0.5, 0.5), color = "black", fill = "red")
+                self.ball_plot_widget.addItem(self.setpoint_position_text)
+            self.setpoint_position_text.setPos(2*_TUBE_RADIUS, primary.target)
+            self.setpoint_position_text.setText(f"{primary.target:.2f}")
 
         if secondary is not None:
             if secondary.sys == SystemType.FAN:
@@ -191,6 +235,12 @@ class MainWindow(QtWidgets.QMainWindow):
             elif secondary.sys == SystemType.BEAM:
                 self.secondary_position.setData([0], [secondary.actual])
             self.contrib_plots.plot_data(secondary, secondary.ts)
+            if self.secondary_position_text is None:
+                self.secondary_position_text = pg.TextItem("", anchor=(0.5, 0.5), color = "black", fill = "white")
+                self.ball_plot_widget.addItem(self.secondary_position_text)
+            self.secondary_position_text.setPos(-2*_TUBE_RADIUS, secondary.actual)
+            self.secondary_position_text.setText(f"{secondary.actual:.2f}")
+            # self.secondary_position_text.setColor("blue" if secondary.sys == SystemType.FAN else "gray")
 
     def run(self):
         # Plot refresh, update @ configured FPS
@@ -204,7 +254,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main():
     queues = QueueContainer(deque(maxlen = 1), deque(maxlen=1))
-    PacketManager(queues = queues, simulated = False).run()
+    PacketManager(queues = queues, simulated = True).run()
     main = MainWindow(
         queues = queues
     )

@@ -2,6 +2,7 @@ import serial
 import time
 import threading
 import copy
+import random
 
 from typing import NamedTuple
 from collections import deque
@@ -45,7 +46,7 @@ class PacketManager:
 
         self._com: serial.Serial = None
         if not self._simulated:
-            self._com = serial.Serial(port = "COM3", baudrate = 115200)
+            self._com = serial.Serial(port = "COM5", baudrate = 115200)
         
     def run(self): 
         threading.Thread(target = self._poll, daemon = True).start()
@@ -72,7 +73,7 @@ class PacketManager:
             logger = self._fan_logger
         else:
             q = self._beam_queue
-            logger = self._beam_queue
+            logger = self._beam_logger
             
         if q is not None: q.append(copy.deepcopy(packet))
         
@@ -84,17 +85,26 @@ class PacketManager:
                 if self._simulated:
                     info = [
                         "0",
-                        "10",
-                        "10",
+                        "17",
+                        "15",
                         "0",
                         "0",
                         "0",
-                        "5",
-                        "6",
-                        "7",
-                        "8",
-                        "9",
-                        str(time.time())
+                        f"{8 + random.randrange(0,100)*0.01}",
+                        f"{11 + random.randrange(0,100)*0.01}",
+                        f"{14 + random.randrange(0,100)*0.01}",
+                        f"{17 + random.randrange(0,100)*0.01}",
+                        "1",
+                        "14",
+                        "12",
+                        "0",
+                        "0",
+                        "0",
+                        f"{8 + random.randrange(0,100)*0.01}",
+                        f"{5 + random.randrange(0,100)*0.01}",
+                        f"{11 + random.randrange(0,100)*0.01}",
+                        f"{13 + random.randrange(0,100)*0.01}",
+                        str(time.process_time()*1.0e3)
                     ]
 
                     is_primary = True
@@ -114,7 +124,7 @@ class PacketManager:
                     self._process_packet(packet)
                         
                 else:
-                    raise ValueError(f"Unexpected number of items: {len(info)}")
+                    raise ValueError(f"Unexpected number of items: {len(info)} != {num_items + 1} or {2*num_items + 1}")
 
             except Exception:
                 import traceback

@@ -107,7 +107,7 @@ constexpr int pot_beam_command_input             = A0;
 constexpr int beam_ultrasonic_sensor_trigger     = 14;
 constexpr int beam_ultrasonic_sensor_echo        = 15;
 
-constexpr int gain_input_toggle           = 18;
+constexpr int gain_input_toggle           = 3;
 constexpr int enable_input_toggle         = 19;
 constexpr int primary_input_toggle        = 2;
 
@@ -141,17 +141,18 @@ Timer primary_input_timer(button_debounce_duration_ms, MILLISECONDS);
 #define servo_limits          {-90, 90}
 #define fan_position_limits   {5, 30}
 #define beam_position_limits  {5, 30}
+constexpr float feed_forward_slope              = -2.0;
+constexpr float feed_forward_offset             = 175.0;
 
 // Beam
 Servo beam_servo;
 constexpr int beam_home_position                = 90;
-constexpr float feed_forward_slope              = -2.0;
-constexpr float feed_forward_offset             = 175.0;
 
 // Temp/humidity sensor
 #if USE_TEMP_SENSOR
 constexpr int temp_sensor_pin = 4;
 DHT11 temp_sensor(temp_sensor_pin);
+filtered_data_t current_temp = { .index = -1 };
 #endif
 
 unsigned long ts;
@@ -254,6 +255,13 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(enable_input_toggle), toggle_edit_enable, FALLING);
   attachInterrupt(digitalPinToInterrupt(primary_input_toggle), toggle_edit_primary, FALLING);
 
+  #if USE_TEMP_SENSOR
+  while (current_temp.index != moving_average_window_size-1) {
+    /* Fill filter buffer with current temp, use calibrated average */
+    filter_data(&current_temp, temp_sensor.readTemperature());
+  }
+  #endif
+
   // Set servo to home position
   beam_servo.attach(bean_servo_pin);
   beam_servo.write(beam_home_position);
@@ -303,7 +311,7 @@ void loop() {
   digitalWrite(led_beam_primary, !primary_state);
 
   /* Display gains */
-  if (iter % lcd_decimation == 0) {
+  if (iter % lcd_decimation == 0 && gain_state) {
     lcdPrint();
   }
 
@@ -333,9 +341,6 @@ void lcdPrint() {
 }
 
 void update_sensed_and_targets() {
-  #if USE_TEMP_SENSOR
-  int current_temp = temp_sensor.readTemperature(); // TODO: decimate? filter? run once?
-  #endif
   #if NUMBER_OF_SYSTEMS == 1
   LOG(1); /* priamry state always == true with one system */
   filter_data(
@@ -352,7 +357,7 @@ void update_sensed_and_targets() {
   filter_data(
     &interfaces[0].actual_position, 
     #if USE_TEMP_SENSOR
-    interfaces[0].position_sensor.measureDistanceCm(current_temp)
+    interfaces[0].position_sensor.measureDistanceCm(current_temp.filtered)
     #else
     interfaces[0].position_sensor.measureDistanceCm()
     #endif
@@ -388,7 +393,7 @@ void update_sensed_and_targets() {
   filter_data(
     &primary_interface->actual_position, 
     #if USE_TEMP_SENSOR
-    primary_interface->position_sensor.measureDistanceCm(current_temp)
+    primary_interface->position_sensor.measureDistanceCm(current_temp.filtered)
     #else
     primary_interface->position_sensor.measureDistanceCm()
     #endif
@@ -397,7 +402,7 @@ void update_sensed_and_targets() {
   filter_data(
     &secondary_interface->actual_position, 
     #if USE_TEMP_SENSOR
-    secondary_interface->position_sensor.measureDistanceCm(current_temp)
+    secondary_interface->position_sensor.measureDistanceCm(current_temp.filtered)
     #else
     secondary_interface->position_sensor.measureDistanceCm()
     #endif
